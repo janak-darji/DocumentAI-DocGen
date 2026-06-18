@@ -162,7 +162,27 @@ _VALID_RISK_LEVEL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# SWMS step numbers: 8, 8a, 8b, 10.1, etc. (not free-text like "6. Nearest Hospital")
+_VALID_STEP_NO_PATTERN = re.compile(r"^\d+(?:\.\d+)?[a-zA-Z]?$")
+
 _DISCLAIMER_MIN_LENGTH = 80
+
+
+def _is_valid_step_no(value: str) -> bool:
+    """Returns True when a cell value is a SWMS step/item number."""
+    return bool(_VALID_STEP_NO_PATTERN.match(value.strip()))
+
+
+def _step_sort_key(step_no: str) -> tuple[int, int, int, int, str]:
+    """Sorts numeric and alphanumeric step numbers in natural order (7, 8a, 8b, 9)."""
+    match = re.match(r"^(\d+)(?:\.(\d+))?([a-zA-Z])?$", step_no.strip())
+    if match:
+        major = int(match.group(1))
+        minor = int(match.group(2) or 0)
+        suffix = (match.group(3) or "").lower()
+        suffix_ord = ord(suffix) - ord("a") + 1 if suffix else 0
+        return (0, major, minor, suffix_ord, "")
+    return (1, 0, 0, 0, step_no.lower())
 
 
 def _row_combined_text(row: dict[str, str]) -> str:
@@ -246,7 +266,7 @@ def _looks_like_fragment_row(row: dict[str, str]) -> bool:
     These rows often carry a numeric step number but only partial phrases in each column.
     """
     step_no = row.get("step_no", "").strip()
-    if step_no and not re.match(r"^\d+$", step_no):
+    if step_no and not _is_valid_step_no(step_no):
         return True
 
     hazard = row.get("hazard", "").strip()
@@ -296,7 +316,7 @@ def _is_valid_risk_level(value: str) -> bool:
 def _looks_like_repeated_header_row(row: dict[str, str]) -> bool:
     """Detects header rows repeated at page/table breaks."""
     step_no = row.get("step_no", "").strip()
-    if step_no and re.match(r"^\d+$", step_no):
+    if step_no and _is_valid_step_no(step_no):
         return False
 
     risk_level = row.get("risk_level", "").strip()
@@ -546,11 +566,6 @@ def merge_grouped_steps(steps: list[dict]) -> list[dict]:
                 continue
             seen.add(key)
             existing["hazards"].append(hazard)
-
-    def _step_sort_key(step_no: str) -> tuple[int, str]:
-        if step_no.isdigit():
-            return (0, f"{int(step_no):06d}")
-        return (1, step_no)
 
     merged_order.sort(key=_step_sort_key)
     result = [merged_steps[step_no] for step_no in merged_order]

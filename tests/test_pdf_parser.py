@@ -7,6 +7,7 @@ from app.services.swms_table import (
     is_non_swms_data_row,
     map_table_rows,
     map_table_rows_from_raw_table,
+    merge_grouped_steps,
     normalize_header,
     normalize_pdf_control_cell,
     parse_controls,
@@ -553,3 +554,28 @@ def test_select_best_swms_table_prefers_complete_table() -> None:
 
     selected = select_best_swms_table([bad_table, good_table])
     assert selected == good_table
+
+
+def test_is_non_swms_data_row_keeps_alphanumeric_step_numbers() -> None:
+    """Alphanumeric step numbers such as 8a and 8b are valid SWMS rows."""
+    row = {
+        "step_no": "8a",
+        "job_task_element": "Excavate trenches using excavator",
+        "hazard": "Striking live electrical services",
+        "risk_level": "1",
+        "controls": "Dial before you dig",
+    }
+    assert not is_non_swms_data_row(row)
+
+
+def test_merge_grouped_steps_sorts_alphanumeric_step_numbers() -> None:
+    """Steps 8a and 8b are ordered between 8 and 9 when merging pages."""
+    steps = [
+        {"stepNo": "9", "jobTaskElement": "Nine", "hazards": [], "sequencePosition": 1},
+        {"stepNo": "8b", "jobTaskElement": "Eight B", "hazards": [], "sequencePosition": 2},
+        {"stepNo": "8a", "jobTaskElement": "Eight A", "hazards": [], "sequencePosition": 3},
+        {"stepNo": "7", "jobTaskElement": "Seven", "hazards": [], "sequencePosition": 4},
+    ]
+
+    merged = merge_grouped_steps(steps)
+    assert [step["stepNo"] for step in merged] == ["7", "8a", "8b", "9"]
