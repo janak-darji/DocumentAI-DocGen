@@ -18,6 +18,7 @@ from app.services.swms_table import (
     score_swms_table,
     select_best_swms_table,
 )
+from app.services.swms_title import pick_swms_title_from_text
 
 PRIMARY_TABLE_SETTINGS = {
     "vertical_strategy": "lines",
@@ -35,8 +36,6 @@ FALLBACK_TABLE_SETTINGS = {
 }
 
 # Exclude repeating page headers/footers from table detection.
-# Row-level footer filtering handles PPE disclaimers; keep crop modest so
-# step headers at page breaks are not clipped.
 PAGE_HEADER_RATIO = 0.05
 PAGE_FOOTER_RATIO = 0.08
 PAGE_CROP_ATTEMPTS = (
@@ -100,6 +99,47 @@ def _normalize_pdf_control_rows(rows: list[dict[str, str]]) -> list[dict[str, st
     return rows
 
 
+def _extract_swms_title_from_page(page) -> str | None:
+    """Extracts SWMS title text from the region directly above the best SWMS table."""
+    for header_ratio, footer_ratio in PAGE_CROP_ATTEMPTS:
+        content_page = _crop_page_content_area(
+            page,
+            header_ratio=header_ratio,
+            footer_ratio=footer_ratio,
+        )
+
+        found_tables = content_page.find_tables(table_settings=PRIMARY_TABLE_SETTINGS)
+        if not found_tables:
+            found_tables = content_page.find_tables()
+
+        best_table_obj = None
+        best_score = 0
+        for table_obj in found_tables:
+            extracted = table_obj.extract()
+            if not extracted or is_footer_only_table(extracted):
+                continue
+            table_score = score_swms_table(extracted)
+            if table_score > best_score:
+                best_score = table_score
+                best_table_obj = table_obj
+
+        if best_table_obj is None or best_score <= 0:
+            continue
+
+        page_x0, page_top, page_x1, _page_bottom = content_page.bbox
+        _table_x0, table_top, _table_x1, _table_bottom = best_table_obj.bbox
+
+        if table_top <= page_top + 5:
+            continue
+
+        title_region = content_page.crop((page_x0, page_top, page_x1, table_top))
+        title = pick_swms_title_from_text(title_region.extract_text())
+        if title:
+            return title
+
+    return None
+
+
 def _extract_mapped_rows_from_page(page) -> list[dict[str, str]]:
     """Extracts mapped SWMS rows from a page, retrying with lighter crops when needed."""
     for header_ratio, footer_ratio in PAGE_CROP_ATTEMPTS:
@@ -120,15 +160,15 @@ def _extract_mapped_rows_from_page(page) -> list[dict[str, str]]:
     return []
 
 
-def parse_pdf_swms(file_obj: BinaryIO) -> list[dict]:
+def parse_pdf_swms(file_obj: BinaryIO) -> dict:
     """
-    Extracts SWMS steps from a PDF file.
+    Extracts SWMS steps and title from a PDF file.
 
     Args:
         file_obj: Readable binary stream positioned at the start of the PDF.
 
     Returns:
-        Structured steps with nested hazards.
+        Dict with `steps` and `swmsTitle`.
 
     Raises:
         CorruptFileError: When the PDF cannot be opened.
@@ -143,9 +183,13 @@ def parse_pdf_swms(file_obj: BinaryIO) -> list[dict]:
         ) from exc
 
     all_rows: list[dict[str, str]] = []
+    swms_title: str | None = None
 
     with pdf:
         for page in pdf.pages:
+            if swms_title is None:
+                swms_title = _extract_swms_title_from_page(page)
+
             mapped_rows = _extract_mapped_rows_from_page(page)
             if mapped_rows:
                 all_rows.extend(mapped_rows)
@@ -155,10 +199,15 @@ def parse_pdf_swms(file_obj: BinaryIO) -> list[dict]:
 
     all_rows = _normalize_pdf_control_rows(all_rows)
     grouped = group_swms_rows(all_rows, control_parser=parse_pdf_controls)
-    return merge_grouped_steps(grouped)
+    steps = merge_grouped_steps(grouped)
+
+    return {
+        "steps": steps,
+        "swmsTitle": swms_title or "",
+    }
 
 
-def parse_pdf_bytes(content: bytes) -> list[dict]:
+def parse_pdf_bytes(content: bytes) -> dict:
     """
     Parses SWMS content from PDF bytes.
 
@@ -166,6 +215,6 @@ def parse_pdf_bytes(content: bytes) -> list[dict]:
         content: Raw PDF bytes.
 
     Returns:
-        Structured steps with nested hazards.
+        Dict with `steps` and `swmsTitle`.
     """
     return parse_pdf_swms(io.BytesIO(content))

@@ -71,8 +71,12 @@ async def parse_swms_document(
 
     if file_type == "pdf":
         # PDF Risk Control cells use symbol-bullet parsing (•, -, ▪, etc.).
-        steps = parse_pdf_bytes(content)
+        parsed = parse_pdf_bytes(content)
     else:
-        steps = parse_docx_bytes(content)
+        parsed = parse_docx_bytes(content)
 
-    return ParsedSwmsResponse(activityType=activity_type, steps=steps)
+    return ParsedSwmsResponse(
+        activityType=activity_type,
+        swmsTitle=parsed.get("swmsTitle", "") or "",
+        steps=parsed["steps"],
+    )

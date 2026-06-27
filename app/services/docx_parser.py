@@ -7,9 +7,11 @@ from typing import BinaryIO
 
 from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
+from docx.oxml.ns import qn
 
 from app.exceptions import CorruptFileError, DocumentParseError
 from app.services.swms_table import group_swms_rows, map_table_rows_from_raw_table
+from app.services.swms_title import pick_swms_title_from_lines
 
 
 def _table_to_matrix(table) -> list[list[str]]:
@@ -20,15 +22,31 @@ def _table_to_matrix(table) -> list[list[str]]:
     return matrix
 
 
-def parse_docx_swms(file_obj: BinaryIO) -> list[dict]:
+def _extract_docx_swms_title(document: Document) -> str | None:
+    """Extracts paragraph text appearing before the first SWMS table."""
+    lines: list[str] = []
+
+    for element in document.element.body:
+        if element.tag == qn("w:tbl"):
+            break
+        if element.tag == qn("w:p"):
+            texts = [node.text for node in element.iter() if node.text]
+            paragraph_text = "".join(texts).strip()
+            if paragraph_text:
+                lines.append(paragraph_text)
+
+    return pick_swms_title_from_lines(lines)
+
+
+def parse_docx_swms(file_obj: BinaryIO) -> dict:
     """
-    Extracts SWMS steps from a DOCX file.
+    Extracts SWMS steps and title from a DOCX file.
 
     Args:
         file_obj: Readable binary stream positioned at the start of the DOCX.
 
     Returns:
-        Structured steps with nested hazards.
+        Dict with `steps` and `swmsTitle`.
 
     Raises:
         CorruptFileError: When the DOCX cannot be opened.
@@ -47,6 +65,7 @@ def parse_docx_swms(file_obj: BinaryIO) -> list[dict]:
             detail=f"{type(exc).__name__}: {exc}",
         ) from exc
 
+    swms_title = _extract_docx_swms_title(document)
     all_steps: list[dict] = []
 
     for table in document.tables:
@@ -66,10 +85,13 @@ def parse_docx_swms(file_obj: BinaryIO) -> list[dict]:
     if not all_steps:
         raise DocumentParseError("No SWMS tables found in DOCX")
 
-    return all_steps
+    return {
+        "steps": all_steps,
+        "swmsTitle": swms_title or "",
+    }
 
 
-def parse_docx_bytes(content: bytes) -> list[dict]:
+def parse_docx_bytes(content: bytes) -> dict:
     """
     Parses SWMS content from DOCX bytes.
 
@@ -77,6 +99,6 @@ def parse_docx_bytes(content: bytes) -> list[dict]:
         content: Raw DOCX bytes.
 
     Returns:
-        Structured steps with nested hazards.
+        Dict with `steps` and `swmsTitle`.
     """
     return parse_docx_swms(io.BytesIO(content))

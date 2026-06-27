@@ -18,4 +18,5 @@ class ParsedStep(BaseModel):
 
 class ParsedSwmsResponse(BaseModel):
     activityType: str
+    swmsTitle: str = ""
     steps: list[ParsedStep]
