@@ -95,3 +95,54 @@ class DocumentParseError(AppError):
             error_code="DOCUMENT_PARSE_ERROR",
             detail=detail,
         )
+
+
+class DocumentRenderError(AppError):
+    """Raised when SWMS Word document rendering fails."""
+
+    def __init__(
+        self,
+        message: str = "Document rendering failed",
+        *,
+        detail: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            status_code=422,
+            error_code="DOCUMENT_RENDER_ERROR",
+            detail=detail,
+        )
+
+
+class UnauthorizedError(AppError):
+    """Raised when a request is missing or has an invalid internal API key."""
+
+    def __init__(
+        self,
+        message: str = "Unauthorized",
+        *,
+        detail: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            status_code=401,
+            error_code="UNAUTHORIZED",
+            detail=detail,
+        )
+
+
+class PayloadTooLargeError(AppError):
+    """Raised when an uploaded document exceeds the configured size limit."""
+
+    def __init__(
+        self,
+        message: str = "Uploaded file is too large",
+        *,
+        detail: str | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            status_code=413,
+            error_code="PAYLOAD_TOO_LARGE",
+            detail=detail,
+        )

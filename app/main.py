@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -11,11 +12,23 @@ from fastapi.responses import JSONResponse
 from app.exceptions import AppError
 from app.logger import configure_logging, logger
 from app.routes.parse import router as parse_router
+from app.routes.render import router as render_router
+from app.security import configured_api_key, is_production_environment
+
+load_dotenv()
 
 configure_logging()
 
+if not configured_api_key() and not is_production_environment():
+    logger.warning(
+        "DOCGEN_API_KEY is not set — /parse and /render are unauthenticated (development only)",
+    )
+elif not configured_api_key() and is_production_environment():
+    logger.error("DOCGEN_API_KEY must be set in production")
+
 app = FastAPI(title="SWMS Docgen Service", version="1.0.0")
 app.include_router(parse_router)
+app.include_router(render_router)
 
 
 def _error_payload(

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
-from app.exceptions import UnsupportedFileTypeError
+from app.exceptions import PayloadTooLargeError, UnsupportedFileTypeError
 from app.schemas.parse import ParsedSwmsResponse
+from app.security import max_upload_bytes, verify_docgen_api_key
 from app.services.docx_parser import parse_docx_bytes
 from app.services.pdf_parser import parse_pdf_bytes
 
-router = APIRouter(tags=["parse"])
+router = APIRouter(tags=["parse"], dependencies=[Depends(verify_docgen_api_key)])
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
 SUPPORTED_MIME_TYPES = {
@@ -68,6 +69,12 @@ async def parse_swms_document(
 
     file_type = _resolve_file_type(file.filename, file.content_type)
     content = await file.read()
+
+    if len(content) > max_upload_bytes():
+        raise PayloadTooLargeError(
+            "Uploaded file is too large",
+            detail=f"Maximum upload size is {max_upload_bytes()} bytes",
+        )
 
     if file_type == "pdf":
         # PDF Risk Control cells use symbol-bullet parsing (•, -, ▪, etc.).
