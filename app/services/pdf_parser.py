@@ -8,6 +8,7 @@ from typing import BinaryIO
 import pdfplumber
 
 from app.exceptions import CorruptFileError, DocumentParseError
+from app.logger import logger
 from app.services.swms_table import (
     group_swms_rows,
     is_footer_only_table,
@@ -186,13 +187,22 @@ def parse_pdf_swms(file_obj: BinaryIO) -> dict:
     swms_title: str | None = None
 
     with pdf:
-        for page in pdf.pages:
-            if swms_title is None:
-                swms_title = _extract_swms_title_from_page(page)
+        for page_index, page in enumerate(pdf.pages, start=1):
+            try:
+                if swms_title is None:
+                    swms_title = _extract_swms_title_from_page(page)
 
-            mapped_rows = _extract_mapped_rows_from_page(page)
-            if mapped_rows:
-                all_rows.extend(mapped_rows)
+                mapped_rows = _extract_mapped_rows_from_page(page)
+                if mapped_rows:
+                    all_rows.extend(mapped_rows)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Skipping PDF page %s due to parse error: %s: %s",
+                    page_index,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
 
     if not all_rows:
         raise DocumentParseError("No SWMS tables found in PDF")

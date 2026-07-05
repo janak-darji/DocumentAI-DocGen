@@ -165,10 +165,14 @@ def _prepare_steps_table_header(table) -> None:
     _set_cell_text_top(header_row.cells[RISK_CONTROL_COLUMN], COMBINED_RISK_CONTROL_HEADER)
 
 
+def _format_comma_separated_list(items: list[str]) -> str:
+    """Formats a list of strings as a comma-separated line for template header cells."""
+    return ", ".join(item.strip() for item in items if item.strip())
+
+
 def _build_header_context(request: RenderSwmsRequest) -> dict[str, str]:
-    job_lines = [request.title.strip(), *request.jobActivities]
-    job_text = "\n".join(line.strip() for line in job_lines if line.strip())
-    plant_text = "\n".join(item.strip() for item in request.plantEquipment if item.strip())
+    job_text = _format_comma_separated_list(request.jobActivities)
+    plant_text = _format_comma_separated_list(request.plantEquipment)
     issue_date = request.swmsIssueDate or date.today().strftime("%d %B %Y")
 
     return {

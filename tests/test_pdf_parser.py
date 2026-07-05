@@ -65,6 +65,14 @@ def test_normalize_header_maps_common_control_headers() -> None:
     assert normalize_header("Control") == "controls"
 
 
+def test_normalize_header_maps_job_task_performed_variants() -> None:
+    """Alternate job/task column headers map to job_task_element."""
+    assert normalize_header("Tasks Performed") == "job_task_element"
+    assert normalize_header("Task Performed") == "job_task_element"
+    assert normalize_header("Tasks/Performed") == "job_task_element"
+    assert normalize_header("Tasks / Performed") == "job_task_element"
+
+
 def test_normalize_header_does_not_map_risk_substrings_loosely() -> None:
     """Short aliases like 'risk' do not steal 'risk control' headers."""
     assert normalize_header("Risk Control") == "controls"

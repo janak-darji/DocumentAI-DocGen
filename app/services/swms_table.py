@@ -24,6 +24,10 @@ COLUMN_ALIASES: dict[str, list[str]] = {
         "job / task element",
         "task element",
         "job element",
+        "tasks performed",
+        "task performed",
+        "tasks/performed",
+        "tasks / performed",
     ],
     "hazard": [
         "potential hazard",

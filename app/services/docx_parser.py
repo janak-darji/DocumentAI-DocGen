@@ -10,6 +10,7 @@ from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 
 from app.exceptions import CorruptFileError, DocumentParseError
+from app.logger import logger
 from app.services.swms_table import group_swms_rows, map_table_rows_from_raw_table
 from app.services.swms_title import pick_swms_title_from_lines
 
@@ -68,19 +69,28 @@ def parse_docx_swms(file_obj: BinaryIO) -> dict:
     swms_title = _extract_docx_swms_title(document)
     all_steps: list[dict] = []
 
-    for table in document.tables:
-        matrix = _table_to_matrix(table)
-        if len(matrix) < 2:
-            continue
+    for table_index, table in enumerate(document.tables, start=1):
+        try:
+            matrix = _table_to_matrix(table)
+            if len(matrix) < 2:
+                continue
 
-        mapped_rows = map_table_rows_from_raw_table(matrix)
-        if not mapped_rows:
-            continue
+            mapped_rows = map_table_rows_from_raw_table(matrix)
+            if not mapped_rows:
+                continue
 
-        grouped = group_swms_rows(mapped_rows)
-        for step in grouped:
-            step["sequencePosition"] = len(all_steps) + 1
-            all_steps.append(step)
+            grouped = group_swms_rows(mapped_rows)
+            for step in grouped:
+                step["sequencePosition"] = len(all_steps) + 1
+                all_steps.append(step)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Skipping DOCX table %s due to parse error: %s: %s",
+                table_index,
+                type(exc).__name__,
+                exc,
+            )
+            continue
 
     if not all_steps:
         raise DocumentParseError("No SWMS tables found in DOCX")

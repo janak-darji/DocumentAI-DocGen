@@ -101,5 +101,6 @@ def test_render_swms_document_bytes_fills_header_fields() -> None:
     header_table = document.tables[0]
 
     assert "123 George St, Brisbane" in header_table.rows[5].cells[2].text
-    assert "Switchboard replacement" in header_table.rows[7].cells[2].text
-    assert "Multimeter" in header_table.rows[9].cells[2].text
+    assert header_table.rows[7].cells[2].text == "Isolate supply, Install switchboard"
+    assert header_table.rows[9].cells[2].text == "Multimeter, Insulated tools"
+    assert "Switchboard replacement" in document.paragraphs[0].text
