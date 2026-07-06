@@ -53,7 +53,6 @@ COLUMN_ALIASES: dict[str, list[str]] = {
         "control measure",
         "controls",
         "control",
-        "hierarchy of control",
         "recommended control",
         "recommended controls",
         "what are the controls",
@@ -139,6 +138,35 @@ _HIERARCHY_LEGEND_CONTROLS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_INFORMATIVE_HIERARCHY_HEADER_PATTERN = re.compile(
+    r"hierarchy\s+of\s+(?:risk\s+)?control",
+    re.IGNORECASE,
+)
+
+_HIERARCHY_CONTROL_TEXT_PATTERN = re.compile(
+    r"^(?:"
+    r"control|"
+    r"risk|"
+    r"\d+\.\s+(?:eliminate|substitute|isolate|engineering|administration|ppe)\b.*"
+    r")$",
+    re.IGNORECASE,
+)
+
+_TASK_HEADER_SUBTEXT_PATTERN = re.compile(
+    r"what\s+is\s+the\s+step\s+by\s+step\s+process\s+for\s+completing\s+your\s+work\s+safely\??",
+    re.IGNORECASE,
+)
+
+_TASK_WARNING_PATTERN = re.compile(
+    r"\*?\s*personal\s+protective\s+equipment\b.*",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_TASK_CONTINUATION_PATTERN = re.compile(
+    r"^\s*\(?\s*cont(?:inued)?['’]?\s*d\.?\s*\)?\s*$",
+    re.IGNORECASE,
+)
+
 _CONTINUATION_PATTERN = re.compile(r"\bcontinued\s+(?:on|overleaf)\b", re.IGNORECASE)
 
 _FOOTER_KEYWORD_PATTERN = re.compile(
@@ -221,6 +249,66 @@ def _has_valid_risk_level(value: str) -> bool:
     return _is_valid_risk_level(_extract_primary_risk_level(value))
 
 
+def _is_informative_hierarchy_header(header: str) -> bool:
+    """Returns True for informative hierarchy-of-control legend headers, not data columns."""
+    normalized = _normalize_header_text(header)
+    if not normalized:
+        return False
+    if _INFORMATIVE_HIERARCHY_HEADER_PATTERN.search(normalized):
+        return True
+    if normalized.startswith("hierarchy of risk"):
+        return True
+    return bool(
+        re.search(
+            r"eliminate the hazard.*substitute the hazard",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
+
+def clean_job_task_element(text: str) -> str:
+    """
+    Removes informative header subtext, continuation markers, and PPE warning blocks
+    that SWMS PDFs often render in red inside the Tasks Performed column.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+
+    cleaned = _TASK_HEADER_SUBTEXT_PATTERN.sub(" ", cleaned)
+    cleaned = _TASK_WARNING_PATTERN.sub(" ", cleaned)
+    cleaned = _TASK_CONTINUATION_PATTERN.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—")
+    return cleaned.strip()
+
+
+def _is_hierarchy_legend_control(text: str) -> bool:
+    """Returns True when a parsed control string is hierarchy legend text, not a real control."""
+    cleaned = _clean_control_text(text)
+    if not cleaned:
+        return True
+    if _HIERARCHY_CONTROL_TEXT_PATTERN.match(cleaned):
+        return True
+    if re.match(r"^\d+\.\s+", cleaned) and re.search(
+        r"\b(?:eliminate|substitute|isolate|engineering|administration|ppe)\b",
+        cleaned,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _controls_header_priority(header: str) -> tuple[int, int]:
+    """Prefers actionable Risk Control headers over informative Hierarchy columns."""
+    normalized = _normalize_header_text(header)
+    if _is_informative_hierarchy_header(header):
+        return (0, len(header.strip()))
+    if "risk control" in normalized:
+        return (2, len(header.strip()))
+    return (1, len(header.strip()))
+
+
 def _looks_like_hierarchy_legend_row(row: dict[str, str]) -> bool:
     """Detects hierarchy-of-control legend rows printed below SWMS tables."""
     combined = _row_combined_text(row)
@@ -238,6 +326,8 @@ def _looks_like_hierarchy_legend_row(row: dict[str, str]) -> bool:
 
     if not row.get("hazard", "").strip() and not row.get("step_no", "").strip():
         if re.search(r"\(\s*least\s+effective\s*\)", controls, re.IGNORECASE):
+            return True
+        if _is_hierarchy_legend_control(controls):
             return True
 
     return False
@@ -605,6 +695,9 @@ def normalize_header(header: str) -> Optional[str]:
     Returns:
         Canonical column key or None when the header is not recognized.
     """
+    if _is_informative_hierarchy_header(header):
+        return None
+
     normalized = _normalize_header_text(header)
     if not normalized:
         return None
@@ -648,7 +741,10 @@ def build_column_map(headers: list[str]) -> dict[int, str]:
 
     column_map: dict[int, str] = {}
     for canonical, options in grouped.items():
-        best_index, _ = max(options, key=lambda item: len(item[1].strip()))
+        if canonical == "controls":
+            best_index, _ = max(options, key=lambda item: _controls_header_priority(item[1]))
+        else:
+            best_index, _ = max(options, key=lambda item: len(item[1].strip()))
         column_map[best_index] = canonical
 
     return enrich_column_map(headers, column_map)
@@ -752,6 +848,8 @@ def _normalize_cell_value(value: str, canonical: str) -> str:
     text = str(value or "").strip()
     if canonical == "controls":
         return text
+    if canonical == "job_task_element":
+        return clean_job_task_element(re.sub(r"\s+", " ", text))
     return re.sub(r"\s+", " ", text)
 
 
@@ -1045,8 +1143,12 @@ def _is_meaningful_control(control: str) -> bool:
 
 
 def _clean_parsed_controls(controls: list[str]) -> list[str]:
-    """Removes empty and symbol-only control fragments."""
-    return [control for control in controls if _is_meaningful_control(control)]
+    """Removes empty, symbol-only, and hierarchy-legend control fragments."""
+    return [
+        control
+        for control in controls
+        if _is_meaningful_control(control) and not _is_hierarchy_legend_control(control)
+    ]
 
 
 def group_swms_rows(
@@ -1093,7 +1195,9 @@ def group_swms_rows(
             continue
 
         parsed_controls = _clean_parsed_controls(control_parser(controls_raw))
-        if not hazard and not _has_valid_risk_level(risk_level) and not parsed_controls:
+        if not hazard:
+            continue
+        if not _has_valid_risk_level(risk_level) and not parsed_controls:
             continue
 
         if not step_no and not job_task:
@@ -1118,7 +1222,7 @@ def group_swms_rows(
                 steps.append(current_step)
             current_step = {
                 "stepNo": step_no,
-                "jobTaskElement": job_task,
+                "jobTaskElement": clean_job_task_element(job_task),
                 "sequencePosition": len(steps) + 1,
                 "hazards": [],
             }

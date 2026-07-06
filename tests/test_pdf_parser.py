@@ -2,6 +2,8 @@
 
 from app.services.swms_table import (
     build_column_map,
+    clean_job_task_element,
+    enrich_column_map,
     filter_swms_data_rows,
     group_swms_rows,
     is_non_swms_data_row,
@@ -587,3 +589,90 @@ def test_merge_grouped_steps_sorts_alphanumeric_step_numbers() -> None:
 
     merged = merge_grouped_steps(steps)
     assert [step["stepNo"] for step in merged] == ["7", "8a", "8b", "9"]
+
+
+CONCRETER_HEADERS = [
+    "STEP\nNo.",
+    "TASKS PERFORMED\nWhat is the step by step process\nfor completing your work safely?",
+    "POTENTIAL HAZARD\nWhat may cause injury/illness?",
+    "RISK\nLevel\nHigh= 1\nMed= 2\nLow = 3",
+    "RISK CONTROL\nHow will the risk\nbe controlled\neffectively?",
+    "Hierarchy of Risk Control\n1. Eliminate the hazard\n2. Substitute the hazard\n3. Isolate the hazard\n4. Engineering – reduce risk\n5. Administration\n6. PPE (least effective)",
+    "Post\nRisk\nLevel\n(ALARP)",
+    "RESPONSIBLE PERSON\n(who will implement the control)",
+]
+
+
+def test_normalize_header_ignores_informative_hierarchy_column() -> None:
+    """Informative hierarchy-of-control headers are not mapped to controls."""
+    assert normalize_header("Hierarchy of Risk Control") is None
+    assert normalize_header(CONCRETER_HEADERS[5]) is None
+    assert normalize_header("Risk Control") == "controls"
+
+
+def test_build_column_map_prefers_risk_control_over_hierarchy() -> None:
+    """When both Risk Control and Hierarchy headers exist, controls maps to Risk Control."""
+    column_map = enrich_column_map(CONCRETER_HEADERS, build_column_map(CONCRETER_HEADERS))
+    assert column_map[4] == "controls"
+    assert 5 not in column_map
+
+
+def test_clean_job_task_element_strips_warning_and_header_subtext() -> None:
+    """Tasks Performed cells drop red warning blocks and repeated header subtext."""
+    assert clean_job_task_element(
+        "What is the step by step process for completing your work safely? Access to site"
+    ) == "Access to site"
+    assert clean_job_task_element(
+        "*PERSONAL PROTECTIVE EQUIPMENT (PPE): Workers must wear correct PPE"
+    ) == ""
+    assert clean_job_task_element("(Cont'd)") == ""
+
+
+def test_group_swms_rows_skips_hierarchy_legend_controls_without_hazard() -> None:
+    """Hierarchy legend fragments without hazards are not emitted as SWMS hazards."""
+    rows = [
+        {
+            "step_no": "2",
+            "job_task_element": "Site induction",
+            "hazard": "Unidentified hazards",
+            "risk_level": "1",
+            "controls": "Complete JSA form before starting work",
+        },
+        {
+            "step_no": "",
+            "job_task_element": "",
+            "hazard": "",
+            "risk_level": "",
+            "controls": "1. Eliminate the hazard",
+        },
+    ]
+
+    steps = group_swms_rows(rows)
+    assert len(steps) == 1
+    assert len(steps[0]["hazards"]) == 1
+    assert steps[0]["hazards"][0]["controls"] == ["Complete JSA form before starting work"]
+
+
+def test_parse_concreter_demolition_pdf_ignores_hierarchy_legend() -> None:
+    """Regression: concreter SWMS PDF should not emit hierarchy legend rows as hazards."""
+    from pathlib import Path
+
+    from app.services.pdf_parser import parse_pdf_bytes
+
+    pdf_path = Path(
+        "/Users/janak/Downloads/SWMS/CONCRETERS/concreter 2/"
+        "DEMOLITION OF CONCRETE KERBS - PAVEMENT - FOOTINGS V2.2.2.pdf"
+    )
+    if not pdf_path.is_file():
+        return
+
+    result = parse_pdf_bytes(pdf_path.read_bytes())
+    assert len(result["steps"]) >= 5
+
+    for step in result["steps"]:
+        assert "PERSONAL PROTECTIVE EQUIPMENT" not in step["jobTaskElement"]
+        for hazard in step["hazards"]:
+            assert hazard["hazard"].strip()
+            for control in hazard["controls"]:
+                assert control.lower() not in {"control", "risk", "eliminate the hazard"}
+                assert not control.lower().startswith("1. eliminate the hazard")
