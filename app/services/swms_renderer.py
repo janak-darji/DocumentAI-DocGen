@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import re
 from datetime import date
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Inches, Pt
 
 from app.exceptions import DocumentRenderError
 from app.schemas.render import RenderSwmsRequest
@@ -36,6 +36,13 @@ STEP_COLUMNS = {
 
 RISK_CONTROL_COLUMN = STEP_COLUMNS["risk_control"]
 HIERARCHY_COLUMN = 5
+# Template includes a trailing micro-column that header/data rows merge into Responsible Person.
+RESPONSIBLE_TRAILING_COLUMN = 8
+
+# Hanging indent so wrapped control text aligns under the first text character, not the bullet.
+BULLET_LEFT_INDENT = Inches(0.2)
+BULLET_HANGING_INDENT = Inches(-0.15)
+BULLET_SPACE_AFTER = Pt(2)
 
 COMBINED_RISK_CONTROL_HEADER = (
     "RISK CONTROL\n"
@@ -76,42 +83,6 @@ def resolve_template_path(template_path: str | None = None) -> Path:
     raise DocumentRenderError("SWMS Word template is not configured")
 
 
-def _format_controls(controls: list[str]) -> str:
-    if not controls:
-        return ""
-    return "\n".join(f"• {control.strip()}" for control in controls if control.strip())
-
-
-def _format_combined_risk_control(controls: list[str]) -> str:
-    """Combines actionable controls with informative hierarchy guidance in one cell."""
-    controls_text = _format_controls(controls)
-    hierarchy = _infer_hierarchy_control(controls)
-    if not hierarchy:
-        return controls_text
-
-    informative = f"Hierarchy (informative): {hierarchy}"
-    if controls_text:
-        return f"{controls_text}\n\n{informative}"
-    return informative
-
-
-def _infer_hierarchy_control(controls: list[str]) -> str:
-    text = " ".join(controls).lower()
-    if re.search(r"\b(eliminat|remove hazard|do not perform)\b", text):
-        return "1. Eliminate the hazard"
-    if re.search(r"\b(substitut|replace with)\b", text):
-        return "2. Substitute the hazard"
-    if re.search(r"\b(isolate|barricad|exclusion zone|lockout|tagout|lock out|tag out)\b", text):
-        return "3. Isolate the hazard from people"
-    if re.search(r"\b(engineer|guard|ventilat|interlock|machine guard)\b", text):
-        return "4. Engineering controls"
-    if re.search(r"\b(procedure|training|supervis|induction|permit|administrative)\b", text):
-        return "5. Administrative controls"
-    if re.search(r"\b(ppe|glove|helmet|harness|boot|goggle|mask|respirator|hi[\s-]?vis)\b", text):
-        return "6. Personal protective equipment (PPE)"
-    return ""
-
-
 def _set_vertical_merge(cell, *, restart: bool) -> None:
     tc_pr = cell._tc.get_or_add_tcPr()
     for child in tc_pr.findall(qn("w:vMerge")):
@@ -133,6 +104,38 @@ def _set_cell_text_top(cell, text: str) -> None:
 def _clear_cell(cell) -> None:
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
     cell.text = ""
+
+
+def _apply_bullet_paragraph_format(paragraph, text: str) -> None:
+    """Formats a paragraph as an indented bullet so wrapped lines align under the text."""
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    paragraph.paragraph_format.left_indent = BULLET_LEFT_INDENT
+    paragraph.paragraph_format.first_line_indent = BULLET_HANGING_INDENT
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = BULLET_SPACE_AFTER
+    paragraph.text = f"• {text}"
+
+
+def _set_risk_control_cell(cell, controls: list[str]) -> None:
+    """Writes risk controls as hanging-indent bullets only (no hierarchy annotations)."""
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+    cell.text = ""
+
+    cleaned_controls = [control.strip() for control in controls if control.strip()]
+    paragraphs = cell.paragraphs
+    next_paragraph_index = 0
+
+    def next_paragraph():
+        nonlocal next_paragraph_index
+        if next_paragraph_index == 0 and paragraphs:
+            paragraph = paragraphs[0]
+        else:
+            paragraph = cell.add_paragraph()
+        next_paragraph_index += 1
+        return paragraph
+
+    for control in cleaned_controls:
+        _apply_bullet_paragraph_format(next_paragraph(), control)
 
 
 def _merge_column_vertically(table, column_index: int, start_row: int, end_row: int) -> None:
@@ -235,16 +238,18 @@ def _fill_steps_table(document: Document, request: RenderSwmsRequest) -> None:
 
             _set_cell_text_top(cells[STEP_COLUMNS["hazard"]], hazard.hazard)
             _set_cell_text_top(cells[STEP_COLUMNS["risk_level"]], hazard.riskLevel)
-            _set_cell_text_top(
-                cells[STEP_COLUMNS["risk_control"]],
-                _format_combined_risk_control(hazard.controls),
-            )
             _merge_cells_horizontally(row, RISK_CONTROL_COLUMN, HIERARCHY_COLUMN)
+            _set_risk_control_cell(cells[STEP_COLUMNS["risk_control"]], hazard.controls)
             _set_cell_text_top(cells[STEP_COLUMNS["post_risk"]], hazard.postRiskLevel)
+            # Merge the template's trailing micro-column into Responsible Person so content
+            # rows match the header and do not leave a blank overlapping column.
+            if len(cells) > RESPONSIBLE_TRAILING_COLUMN:
+                _merge_cells_horizontally(
+                    row,
+                    STEP_COLUMNS["responsible"],
+                    RESPONSIBLE_TRAILING_COLUMN,
+                )
             _set_cell_text_top(cells[STEP_COLUMNS["responsible"]], hazard.responsiblePerson)
-
-            if len(cells) > 8:
-                _set_cell_text_top(cells[8], hazard.responsiblePerson)
 
         end_row_index = start_row_index + hazard_count - 1
         if hazard_count > 1:

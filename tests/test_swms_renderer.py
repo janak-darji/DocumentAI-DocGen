@@ -8,7 +8,12 @@ from docx import Document
 from docx.oxml.ns import qn
 
 from app.schemas.render import RenderSwmsRequest
-from app.services.swms_renderer import render_swms_document_bytes, resolve_template_path
+from app.services.swms_renderer import (
+    BULLET_HANGING_INDENT,
+    BULLET_LEFT_INDENT,
+    render_swms_document_bytes,
+    resolve_template_path,
+)
 
 
 def _sample_request() -> RenderSwmsRequest:
@@ -92,7 +97,50 @@ def test_render_swms_document_bytes_produces_steps_with_vertical_merge() -> None
     grid_span = risk_control_tc.xpath("./w:tcPr/w:gridSpan")
     assert grid_span and grid_span[0].get(qn("w:val")) == "2"
     assert "Lockout/tagout" in steps_table.rows[3].cells[4].text
-    assert "Hierarchy (informative):" in steps_table.rows[3].cells[4].text
+    assert "Hierarchy (informative):" not in steps_table.rows[3].cells[4].text
+
+
+def test_risk_control_bullets_use_hanging_indent() -> None:
+    rendered = render_swms_document_bytes(_sample_request())
+    document = Document(io.BytesIO(rendered))
+    risk_control_cell = document.tables[4].rows[3].cells[4]
+
+    bullet_paragraphs = [
+        paragraph
+        for paragraph in risk_control_cell.paragraphs
+        if paragraph.text.startswith("• ")
+    ]
+    assert len(bullet_paragraphs) == 2
+    assert bullet_paragraphs[0].text == "• Lockout/tagout"
+    assert bullet_paragraphs[1].text == "• Test for dead"
+
+    for paragraph in bullet_paragraphs:
+        assert paragraph.paragraph_format.left_indent == BULLET_LEFT_INDENT
+        assert paragraph.paragraph_format.first_line_indent == BULLET_HANGING_INDENT
+
+    assert all(
+        not paragraph.text.startswith("Hierarchy (informative):")
+        for paragraph in risk_control_cell.paragraphs
+    )
+
+
+def test_responsible_person_merges_trailing_micro_column() -> None:
+    rendered = render_swms_document_bytes(_sample_request())
+    document = Document(io.BytesIO(rendered))
+    first_data_row = document.tables[4].rows[3]
+    raw_cells = first_data_row._tr.findall(qn("w:tc"))
+
+    # After merging risk-control+hierarchy and responsible+trailing micro-column,
+    # the row should have 7 physical cells (not a separate blank trailing column).
+    assert len(raw_cells) == 7
+
+    responsible_tc = raw_cells[6]
+    grid_span = responsible_tc.xpath("./w:tcPr/w:gridSpan")
+    assert grid_span and grid_span[0].get(qn("w:val")) == "2"
+    assert first_data_row.cells[7].text == "Licensed electrician"
+    # Trailing micro-column is absorbed into Responsible Person (same text via grid span).
+    assert first_data_row.cells[8].text == "Licensed electrician"
+    assert first_data_row.cells[8]._tc is first_data_row.cells[7]._tc
 
 
 def test_render_swms_document_bytes_fills_header_fields() -> None:
