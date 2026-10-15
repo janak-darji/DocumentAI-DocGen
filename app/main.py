@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.exceptions import AppError
 from app.logger import configure_logging, logger
 from app.routes.parse import router as parse_router
+from app.routes.parse_document_sections import router as parse_document_sections_router
 from app.routes.render import router as render_router
 from app.security import configured_api_key, is_production_environment
 
@@ -28,6 +29,7 @@ elif not configured_api_key() and is_production_environment():
 
 app = FastAPI(title="SWMS Docgen Service", version="1.0.0")
 app.include_router(parse_router)
+app.include_router(parse_document_sections_router)
 app.include_router(render_router)
 
 
